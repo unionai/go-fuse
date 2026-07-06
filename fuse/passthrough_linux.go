@@ -48,6 +48,16 @@ func negotiatePassthrough(server *Server, input *InitIn, out *InitOut) {
 // UnregisterBackingFd once no open file references it. The backing file must
 // live on a non-stacked filesystem (tmpfs/ext4/xfs), not overlayfs or fuse.
 func (ms *Server) RegisterBackingFd(m *BackingMap) (int32, syscall.Errno) {
+	if passthroughBroker != nil {
+		// Unprivileged daemon on a broker-premounted channel: the node-side
+		// broker holds CAP_SYS_ADMIN and performs the ioctl on our behalf,
+		// scoped to this channel (see passthrough_broker_linux.go).
+		id, errno := passthroughBroker.registerBacking(m)
+		if ms.opts.Debug {
+			log.Printf("broker: BACKING_OPEN {fd %d, flags %#x}: id %d (%v)", m.Fd, m.Flags, id, errno)
+		}
+		return id, errno
+	}
 	id, _, errno := syscall.Syscall(syscall.SYS_IOCTL,
 		uintptr(ms.mountFd), uintptr(_DEV_IOC_BACKING_OPEN), uintptr(unsafe.Pointer(m)))
 	if ms.opts.Debug {
@@ -58,6 +68,13 @@ func (ms *Server) RegisterBackingFd(m *BackingMap) (int32, syscall.Errno) {
 
 // UnregisterBackingFd releases a backing ID via FUSE_DEV_IOC_BACKING_CLOSE.
 func (ms *Server) UnregisterBackingFd(id int32) syscall.Errno {
+	if passthroughBroker != nil {
+		errno := passthroughBroker.unregisterBacking(id)
+		if ms.opts.Debug {
+			log.Printf("broker: BACKING_CLOSE id %d: %v", id, errno)
+		}
+		return errno
+	}
 	_, _, errno := syscall.Syscall(syscall.SYS_IOCTL,
 		uintptr(ms.mountFd), uintptr(_DEV_IOC_BACKING_CLOSE), uintptr(unsafe.Pointer(&id)))
 	if ms.opts.Debug {
