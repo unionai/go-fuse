@@ -90,6 +90,17 @@ type Server struct {
 
 	// for implementing single threaded processing.
 	requestProcessingMu sync.Mutex
+
+	// passthroughBrokerConn caches this Server's own broker connection for
+	// delegated FUSE passthrough registration (Linux only — see
+	// passthrough_broker_linux.go; unused/nil on other platforms). Declared
+	// here as interface{} rather than *brokerConn so this file stays
+	// platform-generic (this module targets go1.13, predating `any`).
+	// Scoped per-Server rather than a package-wide global so a process
+	// hosting multiple mounts with passthrough enabled doesn't route every
+	// mount's registrations through one shared connection/subpath.
+	passthroughBrokerOnce sync.Once
+	passthroughBrokerConn interface{}
 }
 
 // SetDebug is deprecated. Use MountOptions.Debug instead.

@@ -22,15 +22,23 @@ const (
 // opted in and the kernel supports it. The kernel only reads Flags2 when
 // CAP_INIT_EXT is set in Flags.
 func negotiatePassthrough(server *Server, input *InitIn, out *InitOut) {
-	if !server.opts.EnablePassthrough || input.Flags2&uint32(CAP_PASSTHROUGH>>32) == 0 {
+	// input.Flags2 (added in minor 36) is only valid to read if this INIT
+	// request's minor version actually carries it — an older kernel's
+	// shorter INIT never wrote those bytes, so input.Flags2 would otherwise
+	// read leftover content from an unrelated prior request sharing the
+	// same pooled, never-zeroed buffer (see _MINOR_VERSION_INIT_EXT).
+	if !server.opts.EnablePassthrough || input.Minor < _MINOR_VERSION_INIT_EXT ||
+		input.Flags2&uint32(CAP_PASSTHROUGH>>32) == 0 {
 		return
+	}
+	// Kernel cap is FUSE_MAX_MAX_STACK_DEPTH (2); clamp locally rather than
+	// relying solely on the kernel to reject an out-of-range caller value.
+	msd := server.opts.MaxStackDepth
+	if msd <= 0 || msd > 2 {
+		msd = 2
 	}
 	out.Flags |= CAP_INIT_EXT
 	out.Flags2 |= uint32(CAP_PASSTHROUGH >> 32)
-	msd := server.opts.MaxStackDepth
-	if msd <= 0 {
-		msd = 2
-	}
 	out.MaxStackDepth = uint32(msd)
 }
 
@@ -40,11 +48,11 @@ func negotiatePassthrough(server *Server, input *InitIn, out *InitOut) {
 // UnregisterBackingFd once no open file references it. The backing file must
 // live on a non-stacked filesystem (tmpfs/ext4/xfs), not overlayfs or fuse.
 func (ms *Server) RegisterBackingFd(m *BackingMap) (int32, syscall.Errno) {
-	if passthroughBroker != nil {
+	if broker := ms.passthroughBroker(); broker != nil {
 		// Unprivileged daemon on a broker-premounted channel: the node-side
 		// broker holds CAP_SYS_ADMIN and performs the ioctl on our behalf,
 		// scoped to this channel (see passthrough_broker_linux.go).
-		id, errno := passthroughBroker.registerBacking(m)
+		id, errno := broker.registerBacking(m)
 		if ms.opts.Debug {
 			log.Printf("broker: BACKING_OPEN {fd %d, flags %#x}: id %d (%v)", m.Fd, m.Flags, id, errno)
 		}
@@ -60,8 +68,8 @@ func (ms *Server) RegisterBackingFd(m *BackingMap) (int32, syscall.Errno) {
 
 // UnregisterBackingFd releases a backing ID via FUSE_DEV_IOC_BACKING_CLOSE.
 func (ms *Server) UnregisterBackingFd(id int32) syscall.Errno {
-	if passthroughBroker != nil {
-		errno := passthroughBroker.unregisterBacking(id)
+	if broker := ms.passthroughBroker(); broker != nil {
+		errno := broker.unregisterBacking(id)
 		if ms.opts.Debug {
 			log.Printf("broker: BACKING_CLOSE id %d: %v", id, errno)
 		}
