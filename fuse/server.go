@@ -646,9 +646,18 @@ func (ms *Server) Wait() {
 	ms.loops.Wait()
 }
 
+// wakeupReader issues a STATFS against the mount from a child process so a
+// reader blocked in read(2) on /dev/fuse returns. It must not be waited on
+// synchronously (the request it makes is served by this very process), but
+// it must be waited on: an unreaped child stays a zombie for the life of the
+// daemon, and checkLostRequests fires 30 of these on every adopted mount.
 func (ms *Server) wakeupReader() {
 	cmd := exec.Command("df", ms.mountPoint)
-	_ = cmd.Start()
+	if err := cmd.Start(); err != nil {
+		log.Printf("wakeupReader: cannot start df %s: %v", ms.mountPoint, err)
+		return
+	}
+	go func() { _ = cmd.Wait() }()
 }
 
 func (ms *Server) checkRequestTimeout(timeout time.Duration) {
