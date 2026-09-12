@@ -654,6 +654,7 @@ func (ms *Server) Wait() {
 func (ms *Server) wakeupReader() {
 	cmd := exec.Command("df", ms.mountPoint)
 	if err := cmd.Start(); err != nil {
+		log.Printf("wakeupReader: cannot start df %s: %v", ms.mountPoint, err)
 		return
 	}
 	go func() { _ = cmd.Wait() }()
