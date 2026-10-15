@@ -14,6 +14,23 @@ import (
 	"unsafe"
 )
 
+// _MINOR_VERSION_INIT_EXT is the first minor version whose INIT request wire
+// size covers InitIn.Flags2 (see parse() below, which clamps a legacy-sized
+// INIT read to the shorter struct). Reading Flags2 for an older client isn't
+// just "wrong protocol data" — the request buffer is pooled and reused across
+// requests without zeroing (see reqPool), so bytes past what a short INIT
+// actually wrote are leftover content from an unrelated prior request, not
+// zero. Anything that reads InitIn.Flags2 (directly, or via
+// Server.kernelSettings) must gate on this first.
+//
+// This is a property of the FUSE wire protocol, not of the host, so it lives
+// here rather than beside the per-platform _OUR_MINOR_VERSION: opcode.go reads
+// it on every platform, and having it in request_linux.go broke the darwin
+// build outright (undefined: _MINOR_VERSION_INIT_EXT). On a platform that
+// advertises a lower _OUR_MINOR_VERSION the comparison simply always holds and
+// Flags2 is discarded, which is the correct conservative answer.
+const _MINOR_VERSION_INIT_EXT = 36
+
 var sizeOfOutHeader = unsafe.Sizeof(OutHeader{})
 var zeroOutBuf [outputHeaderSize]byte
 
